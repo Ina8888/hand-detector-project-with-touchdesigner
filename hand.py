@@ -1,5 +1,7 @@
 import cv2
 import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 import threading
@@ -9,20 +11,16 @@ import time
 app = Flask(__name__)
 CORS(app)
 
-mp_hands = mp.solutions.hands
-mp_drawing = mp.solutions.drawing_utils
+# Create HandLandmarker
+base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
+options = vision.HandLandmarkerOptions(base_options=base_options, num_hands=1)
+detector = vision.HandLandmarker.create_from_options(options)
 
 current_hand_data = {"wrist": [0.5, 0.5, 0], "gesture": "none", "fingers": [0,0,0,0,0]}
 
 class HandTracker:
     def __init__(self):
         self.cap = None
-        self.hands = mp_hands.Hands(
-            model_complexity=0,
-            max_num_hands=1,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
         self.running = True
         
     def start_tracking(self):
@@ -43,25 +41,29 @@ class HandTracker:
 
             frame = cv2.flip(frame, 1)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = self.hands.process(rgb)
+            
+            # Convert to MediaPipe image using mediapipe.Image
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            
+            # Detect hands
+            result = detector.detect(mp_image)
 
-            if results.multi_hand_landmarks:
-                for hand_landmarks in results.multi_hand_landmarks:
-                    landmarks = hand_landmarks.landmark
-                    
-                    fingers = [
-                        1 if landmarks[8].y < landmarks[6].y else 0,
-                        1 if landmarks[12].y < landmarks[10].y else 0, 
-                        1 if landmarks[16].y < landmarks[14].y else 0,
-                        1 if landmarks[20].y < landmarks[18].y else 0,
-                        1 if landmarks[4].x < landmarks[3].x else 0
-                    ]
-                    
-                    current_hand_data = {
-                        'wrist': [landmarks[0].x, landmarks[0].y, landmarks[0].z],
-                        'gesture': 'open' if sum(fingers) >= 3 else 'closed',
-                        'fingers': fingers
-                    }
+            if result.hand_landmarks and len(result.hand_landmarks) > 0:
+                landmarks = result.hand_landmarks[0]
+                
+                fingers = [
+                    1 if landmarks[8].y < landmarks[6].y else 0,
+                    1 if landmarks[12].y < landmarks[10].y else 0, 
+                    1 if landmarks[16].y < landmarks[14].y else 0,
+                    1 if landmarks[20].y < landmarks[18].y else 0,
+                    1 if landmarks[4].x < landmarks[3].x else 0
+                ]
+                
+                current_hand_data = {
+                    'wrist': [landmarks[0].x, landmarks[0].y, landmarks[0].z],
+                    'gesture': 'open' if sum(fingers) >= 3 else 'closed',
+                    'fingers': fingers
+                }
             else:
                 # Reset when no hand detected
                 current_hand_data = {"wrist": [0.5, 0.5, 0], "gesture": "none", "fingers": [0,0,0,0,0]}
